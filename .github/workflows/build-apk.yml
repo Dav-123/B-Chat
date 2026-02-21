@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # Checkout the code
+      # Checkout code
       - name: Checkout code
         uses: actions/checkout@v3
 
@@ -31,21 +31,9 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      # Download Gradle wrapper if it does not exist
-      - name: Setup Gradle Wrapper
-        run: |
-          # Create wrapper folder
-          mkdir -p gradle/wrapper
-          
-          # Download Gradle wrapper JAR
-          curl -L https://repo1.maven.org/maven2/org/gradle/gradle-wrapper/7.6.3/gradle-wrapper.jar -o gradle/wrapper/gradle-wrapper.jar
-          
-          # Download gradlew executables
-          curl -L https://raw.githubusercontent.com/gradle/gradle/v7.6.3/gradle/wrapper/gradlew -o gradlew
-          curl -L https://raw.githubusercontent.com/gradle/gradle/v7.6.3/gradle/wrapper/gradlew.bat -o gradlew.bat
-          
-          # Make Unix gradlew executable
-          chmod +x gradlew
+      # Make gradlew executable
+      - name: Make Gradle executable
+        run: chmod +x ./gradlew
 
       # Build APK
       - name: Build APK
