@@ -10,29 +10,48 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # Checkout the code
       - name: Checkout code
         uses: actions/checkout@v3
 
+      # Setup Node.js
       - name: Setup Node.js
         uses: actions/setup-node@v3
         with:
           node-version: 18
 
+      # Setup Java
       - name: Setup Java
         uses: actions/setup-java@v3
         with:
           distribution: 'zulu'
           java-version: '17'
 
+      # Install npm dependencies
       - name: Install dependencies
         run: npm install
 
-      - name: Make Gradle executable
-        run: chmod +x ./gradlew
+      # Download Gradle wrapper if it does not exist
+      - name: Setup Gradle Wrapper
+        run: |
+          # Create wrapper folder
+          mkdir -p gradle/wrapper
+          
+          # Download Gradle wrapper JAR
+          curl -L https://repo1.maven.org/maven2/org/gradle/gradle-wrapper/7.6.3/gradle-wrapper.jar -o gradle/wrapper/gradle-wrapper.jar
+          
+          # Download gradlew executables
+          curl -L https://raw.githubusercontent.com/gradle/gradle/v7.6.3/gradle/wrapper/gradlew -o gradlew
+          curl -L https://raw.githubusercontent.com/gradle/gradle/v7.6.3/gradle/wrapper/gradlew.bat -o gradlew.bat
+          
+          # Make Unix gradlew executable
+          chmod +x gradlew
 
+      # Build APK
       - name: Build APK
         run: ./gradlew assembleRelease --no-daemon
 
+      # Upload APK artifact
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
@@ -40,6 +59,7 @@ jobs:
           path: app/build/outputs/apk/release/app-release.apk
           retention-days: 30
 
+      # Create GitHub Release if tag
       - name: Create Release
         uses: softprops/action-gh-release@v1
         if: startsWith(github.ref, 'refs/tags/')
