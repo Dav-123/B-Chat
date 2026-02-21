@@ -1,5 +1,0 @@
-#!/usr/bin/env sh
-# gradlew
-
-export GRADLE_HOME=$(dirname "$0")/gradle
-exec "$GRADLE_HOME"/wrapper/dists/gradle-7.6.3-all/bin/gradle "$@"
