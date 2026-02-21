@@ -24,6 +24,10 @@ jobs:
           distribution: 'zulu'
           java-version: '17'
       
+      - name: Download Gradle Wrapper Jar
+        run: |
+          mkdir -p android/gradle/wrapper curl-L https://repo1.maven.org/maven2/org/gradle/gradle-wrapper/7.6.3/gradle-wrapper-7.6.3.jar -o android/gradle/wrapper/gradle-wrapper.jar
+      
       - name: Install dependencies
         run: npm install
       
