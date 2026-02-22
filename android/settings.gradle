@@ -1,15 +1,5 @@
-pluginManagement {
-    repositories {
-        gradlePluginPortal()
-        google()
-        mavenCentral()
-    }
-}
-
-plugins {
-    id("com.facebook.react.settings")
-}
-
 rootProject.name = "bchat"
+
+apply from: file("../node_modules/react-native-gradle-plugin/settings.gradle")
 
 include(":app")
