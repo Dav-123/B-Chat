@@ -1,0 +1,96 @@
+{
+  "expo": {
+    "name": "BChat",
+    "slug": "BChat",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/images/icon.png",
+    "scheme": "bchat",
+    "userInterfaceStyle": "dark",
+    "splash": {
+      "image": "./assets/images/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#080810"
+    },
+    "newArchEnabled": true,
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#080810",
+        "foregroundImage": "./assets/images/android-icon-foreground.png"
+      },
+      "permissions": [
+        "CAMERA",
+        "RECORD_AUDIO",
+        "BLUETOOTH_SCAN",
+        "BLUETOOTH_CONNECT",
+        "BLUETOOTH_ADVERTISE",
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION",
+        "POST_NOTIFICATIONS",
+        "READ_MEDIA_IMAGES",
+        "READ_MEDIA_VIDEO",
+        "READ_MEDIA_AUDIO"
+      ],
+      "predictiveBackGestureEnabled": false,
+      "package": "com.bchat.app"
+    },
+"plugins": [
+  [
+    "expo-build-properties",
+    {
+      "android": {
+        "compileSdkVersion": 36,
+        "targetSdkVersion": 36,
+        "minSdkVersion": 24
+      }
+    }
+  ],
+
+  "expo-router",
+
+  [
+    "expo-splash-screen",
+    {
+      "image": "./assets/images/splash-icon.png",
+      "imageWidth": 200,
+      "resizeMode": "contain",
+      "backgroundColor": "#080810"
+    }
+  ],
+
+  "expo-sqlite",
+  "expo-secure-store",
+  "expo-file-system",
+  "expo-image-picker",
+  "expo-document-picker",
+  "expo-media-library",
+  "expo-notifications",
+  "expo-av",
+  "expo-location",
+  "react-native-ble-plx",
+
+  [
+    "react-native-permissions",
+    {
+      "iosPermissions": [
+        "Camera",
+        "Microphone",
+        "LocationWhenInUse",
+        "LocationAlways",
+        "MediaLibrary",
+        "Notifications"
+      ]
+    }
+  ]
+],
+    "experiments": {
+      "typedRoutes": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "52b545f1-be0f-4152-a474-4e411b6e2df0"
+      }
+    }
+  }
+}

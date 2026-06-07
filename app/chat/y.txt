@@ -1,0 +1,1533 @@
+import React, { useState, useRef, useEffect, useCallback } from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  FlatList,
+  TextInput,
+  TouchableOpacity,
+  KeyboardAvoidingView,
+  Platform,
+  Image,
+  Alert,
+  Animated,
+  Modal,
+  StatusBar,
+  Keyboard,
+} from 'react-native';
+import { LinearGradient } from 'expo-linear-gradient';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useLocalSearchParams, router } from 'expo-router';
+import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
+import * as DocumentPicker from 'expo-document-picker';
+import * as ImagePicker from 'expo-image-picker';
+import { COLORS, SPACING, BORDER_RADIUS } from '@/constants/theme';
+import { Message, MessageStatus, Chat } from '@/types';
+import { useAuthStore } from '@/store/authStore';
+import { useChatStore } from '@/store/chatStore';
+import { useMeshStore } from '@/store/meshStore';
+import { callService } from '@/services/CallService';
+import { meshNetworkService } from '@/mesh/MeshNetworkService';
+import { DatabaseService } from '@/database/DatabaseService';
+import uuid from 'react-native-uuid';
+import { Audio } from 'expo-av';
+
+
+// ─── Read receipts ────────────────────────────────────────────────────────────
+
+function ReadReceipts({
+  message,
+  currentUserId,
+}: {
+  message: Message;
+  currentUserId: string;
+}) {
+  if (message.senderId !== currentUserId) return null;
+  const receipts = message.readBy ?? [];
+  if (receipts.length === 0) return null;
+
+  return (
+    <View style={styles.receiptsRow}>
+      {receipts.slice(0, 3).map((r) => (
+        <Image
+          key={r.userId}
+          source={{
+            uri:
+              r.avatar ||
+              `https://api.dicebear.com/7.x/avataaars/png?seed=${r.userId}`,
+          }}
+          style={styles.receiptAvatar}
+        />
+      ))}
+    </View>
+  );
+}
+
+// ─── Status indicator ─────────────────────────────────────────────────────────
+
+function MessageStatusIndicator({ status }: { status: MessageStatus }) {
+  switch (status) {
+    case 'sending':
+      return <Feather name="clock" size={12} color="rgba(255,255,255,0.4)" />;
+    case 'sent':
+      return (
+        <MaterialCommunityIcons
+          name="check"
+          size={14}
+          color="rgba(255,255,255,0.5)"
+        />
+      );
+    case 'delivered':
+      return (
+        <MaterialCommunityIcons
+          name="check-all"
+          size={14}
+          color="rgba(255,255,255,0.5)"
+        />
+      );
+    case 'read':
+      return (
+        <MaterialCommunityIcons
+          name="check-all"
+          size={14}
+          color={COLORS.neonBlue}
+        />
+      );
+    case 'failed':
+      return (
+        <Feather name="alert-circle" size={12} color={COLORS.error} />
+      );
+    case 'pending':
+    case 'queued':
+      return (
+        <MaterialCommunityIcons
+          name="timer-sand"
+          size={12}
+          color={COLORS.warning}
+        />
+      );
+    default:
+      return null;
+  }
+}
+
+// ─── Message bubble ───────────────────────────────────────────────────────────
+
+function MessageBubble({
+  message,
+  currentUserId,
+  onLongPress,
+}: {
+  message: Message;
+  currentUserId: string;
+  onLongPress: (message: Message) => void;
+}) {
+  const isSent = message.senderId === currentUserId;
+
+  return (
+    <View
+      style={[
+        styles.bubbleWrapper,
+        isSent ? styles.bubbleWrapperSent : styles.bubbleWrapperReceived,
+      ]}
+    >
+      <TouchableOpacity
+        onLongPress={() => onLongPress(message)}
+        style={[
+          styles.bubble,
+          isSent ? styles.bubbleSent : styles.bubbleReceived,
+          message.isDeleted && styles.bubbleDeleted,
+        ]}
+        activeOpacity={0.85}
+      >
+        {/* Reply preview */}
+        {message.replyTo && (
+          <View style={styles.replyPreview}>
+            <View style={styles.replyBar} />
+            <Text style={styles.replyText} numberOfLines={2}>
+              Replying to message...
+            </Text>
+          </View>
+        )}
+
+        {/* Content */}
+        {message.isDeleted ? (
+          <Text style={styles.deletedText}>This message was deleted</Text>
+        ) : message.type === 'image' ? (
+          <View>
+            <Image
+              source={{ uri: message.fileUrl }}
+              style={styles.messageImage}
+            />
+            {message.content ? (
+              <Text style={styles.imageCaption}>{message.content}</Text>
+            ) : null}
+          </View>
+        ) : message.type === 'video' ? (
+          <View style={styles.fileContainer}>
+            <MaterialCommunityIcons
+              name="video-outline"
+              size={28}
+              color={isSent ? '#fff' : COLORS.primaryLight}
+            />
+            <View style={styles.fileInfo}>
+              <Text
+                style={[
+                  styles.fileName,
+                  isSent ? styles.textSent : styles.textReceived,
+                ]}
+                numberOfLines={1}
+              >
+                {message.fileName ?? 'Video'}
+              </Text>
+              <Text
+                style={[
+                  styles.fileSize,
+                  isSent ? styles.textSentMuted : styles.textReceivedMuted,
+                ]}
+              >
+                {message.fileSize
+                  ? `${(message.fileSize / (1024 * 1024)).toFixed(1)} MB`
+                  : ''}
+              </Text>
+            </View>
+          </View>
+        ) : message.type === 'voiceNote' ? (
+          <View style={styles.voiceNoteContainer}>
+            <MaterialCommunityIcons
+              name="microphone"
+              size={18}
+              color={isSent ? '#fff' : COLORS.primaryLight}
+            />
+            <View style={styles.voiceWave}>
+              {[...Array(12)].map((_, i) => (
+                <View
+                  key={i}
+                  style={[
+                    styles.waveBar,
+                    { height: 6 + ((i * 3) % 16) },
+                    isSent ? styles.waveBarSent : styles.waveBarReceived,
+                  ]}
+                />
+              ))}
+            </View>
+            <Text
+              style={[
+                styles.voiceDuration,
+                isSent ? styles.textSent : styles.textReceived,
+              ]}
+            >
+              {message.duration
+                ? `${Math.floor(message.duration / 60)}:${String(
+                    message.duration % 60
+                  ).padStart(2, '0')}`
+                : '0:00'}
+            </Text>
+          </View>
+        ) : message.type === 'file' || message.type === 'document' ? (
+          <View style={styles.fileContainer}>
+            <MaterialCommunityIcons
+              name="file-outline"
+              size={28}
+              color={isSent ? '#fff' : COLORS.primaryLight}
+            />
+            <View style={styles.fileInfo}>
+              <Text
+                style={[
+                  styles.fileName,
+                  isSent ? styles.textSent : styles.textReceived,
+                ]}
+                numberOfLines={1}
+              >
+                {message.fileName}
+              </Text>
+              <Text
+                style={[
+                  styles.fileSize,
+                  isSent ? styles.textSentMuted : styles.textReceivedMuted,
+                ]}
+              >
+                {message.fileSize
+                  ? `${(message.fileSize / 1024).toFixed(1)} KB`
+                  : ''}
+              </Text>
+            </View>
+          </View>
+        ) : (
+          <Text
+            style={[
+              styles.messageText,
+              isSent ? styles.textSent : styles.textReceived,
+            ]}
+          >
+            {message.content}
+          </Text>
+        )}
+
+        {/* Reactions */}
+        {message.reactions && message.reactions.length > 0 && (
+          <View style={styles.reactionsRow}>
+            {Object.entries(
+              message.reactions.reduce<Record<string, number>>((acc, r) => {
+                acc[r.emoji] = (acc[r.emoji] ?? 0) + 1;
+                return acc;
+              }, {})
+            ).map(([emoji, count]: [string, number]) => (
+              <View key={emoji} style={styles.reaction}>
+                <Text style={styles.reactionEmoji}>{emoji}</Text>
+                {count > 1 && (
+                  <Text style={styles.reactionCount}>{count}</Text>
+                )}
+              </View>
+            ))}
+          </View>
+        )}
+
+        {/* Footer */}
+        <View style={styles.messageFooter}>
+          <Text
+            style={[
+              styles.messageTime,
+              isSent ? styles.timeSent : styles.timeReceived,
+            ]}
+          >
+            {new Date(message.timestamp).toLocaleTimeString([], {
+              hour: '2-digit',
+              minute: '2-digit',
+            })}
+          </Text>
+          {isSent && <MessageStatusIndicator status={message.status} />}
+        </View>
+      </TouchableOpacity>
+
+      <ReadReceipts message={message} currentUserId={currentUserId} />
+    </View>
+  );
+}
+
+// ─── Chat screen ──────────────────────────────────────────────────────────────
+
+export default function ChatScreen() {
+  const { id } = useLocalSearchParams<{ id: string }>();
+  const { currentUser } = useAuthStore();
+  const { addOrUpdateChat, updateLastMessage, markAsRead } = useChatStore();
+  const { nearbyDevices, isMeshActive } = useMeshStore();
+  const insets = useSafeAreaInsets();
+
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [inputText, setInputText] = useState('');
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordingDuration, setRecordingDuration] = useState(0);
+  const [showAttachmentModal, setShowAttachmentModal] = useState(false);
+  const [selectedMessage, setSelectedMessage] = useState<Message | null>(null);
+  const [showReactionModal, setShowReactionModal] = useState(false);
+  const [isTyping, setIsTyping] = useState(false);
+  const [isAutoRelaying, setIsAutoRelaying] = useState(false);
+  const [partnerName, setPartnerName] = useState<string>('');
+  const [keyboardVisible, setKeyboardVisible] = useState(false);
+
+  const flatListRef = useRef<FlatList>(null);
+  const inputRef = useRef<TextInput>(null);
+  const recordingRef = useRef<Audio.Recording | null>(null);
+  const recordingTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+  const recordAnim = useRef(new Animated.Value(1)).current;
+
+  const chatPartnerId = id ?? '';
+
+  // ── Keyboard visibility tracking ──────────────────────────────────────────
+
+  useEffect(() => {
+    const showSub = Keyboard.addListener(
+      Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow',
+      () => {
+        setKeyboardVisible(true);
+        setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
+      }
+    );
+    const hideSub = Keyboard.addListener(
+      Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide',
+      () => setKeyboardVisible(false)
+    );
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, []);
+
+  // ── Derive partner info ────────────────────────────────────────────────────
+
+  useEffect(() => {
+    const device = nearbyDevices.find(
+      (d) => d.id === chatPartnerId || d.deviceId === chatPartnerId
+    );
+    setPartnerName(
+      device?.user?.name ?? device?.name ?? chatPartnerId.slice(0, 10)
+    );
+  }, [nearbyDevices, chatPartnerId]);
+
+  // ── Load messages from DB on mount ─────────────────────────────────────────
+
+  useEffect(() => {
+    if (!id) return;
+    const loadMessages = async () => {
+      try {
+        const stored = await DatabaseService.getMessages(id, { limit: 60 });
+        setMessages(stored);
+        setTimeout(
+          () => flatListRef.current?.scrollToEnd({ animated: false }),
+          100
+        );
+      } catch (e) {
+        console.error('[Chat] Failed to load messages:', e);
+      }
+    };
+    loadMessages();
+    markAsRead(id);
+  }, [id, markAsRead]);
+
+  // ── Ensure the chat record exists in DB ────────────────────────────────────
+
+  useEffect(() => {
+    if (!currentUser || !id) return;
+    const ensureChat = async () => {
+      const chat: Chat = {
+        id,
+        participants: [currentUser.id, chatPartnerId],
+        unreadCount: 0,
+        isPinned: false,
+        isArchived: false,
+        isMuted: false,
+        isBlocked: false,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      };
+      await DatabaseService.saveChat(chat);
+      addOrUpdateChat(chat);
+    };
+    ensureChat().catch((e) => console.error('[Chat] ensureChat failed:', e));
+  }, [id, currentUser, chatPartnerId, addOrUpdateChat]);
+
+  // ── Core send function ─────────────────────────────────────────────────────
+
+  const sendMessage = useCallback(
+    async (
+      content: string,
+      type: Message['type'] = 'text',
+      extras: Partial<Message> = {}
+    ) => {
+      if (!currentUser) return;
+
+      const msg: Message = {
+        id: uuid.v4() as string,
+        chatId: id,
+        senderId: currentUser.id,
+        receiverId: chatPartnerId,
+        content,
+        type,
+        timestamp: Date.now(),
+        status: 'sending',
+        encrypted: true,
+        hopCount: 0,
+        routePath: [],
+        reactions: [],
+        readBy: [],
+        ...extras,
+      };
+
+      setMessages((prev) => [...prev, msg]);
+      setTimeout(
+        () => flatListRef.current?.scrollToEnd({ animated: true }),
+        50
+      );
+
+      try {
+        await DatabaseService.saveMessage(msg);
+        await DatabaseService.saveChat({
+          id,
+          participants: [currentUser.id, chatPartnerId],
+          lastMessage: msg,
+          unreadCount: 0,
+          isPinned: false,
+          isArchived: false,
+          isMuted: false,
+          isBlocked: false,
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        });
+      } catch (e) {
+        console.error('[Chat] DB save failed:', e);
+      }
+
+      updateLastMessage(id, msg);
+
+      let sent = false;
+      if (isMeshActive) {
+        try {
+          sent = await meshNetworkService.sendMessage(msg, chatPartnerId);
+        } catch (e) {
+          console.error('[Chat] Mesh send failed:', e);
+        }
+      }
+
+      const nextStatus: MessageStatus = sent ? 'sent' : 'queued';
+      const updated = { ...msg, status: nextStatus };
+
+      setMessages((prev) =>
+        prev.map((m) => (m.id === msg.id ? updated : m))
+      );
+
+      try {
+        await DatabaseService.updateMessageStatus(msg.id, nextStatus);
+      } catch (e) {
+        console.error('[Chat] Status update failed:', e);
+      }
+
+      if (!sent) {
+        await DatabaseService.enqueuePendingMessage(msg, chatPartnerId, 'high');
+      }
+
+      if (sent) {
+        setTimeout(async () => {
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === msg.id ? { ...m, status: 'delivered' } : m
+            )
+          );
+          await DatabaseService.updateMessageStatus(msg.id, 'delivered', {
+            deliveredAt: Date.now(),
+          });
+        }, 2000);
+      }
+    },
+    [currentUser, id, chatPartnerId, isMeshActive, updateLastMessage]
+  );
+
+  const handleSend = () => {
+    if (!inputText.trim()) return;
+    sendMessage(inputText.trim());
+    setInputText('');
+    setIsTyping(false);
+  };
+
+  // ── Voice recording ────────────────────────────────────────────────────────
+
+  const startRecording = async () => {
+    try {
+      const permission = await Audio.requestPermissionsAsync();
+      if (!permission.granted) {
+        Alert.alert(
+          'Permission Required',
+          'Microphone access is needed to record voice notes.'
+        );
+        return;
+      }
+
+      await Audio.setAudioModeAsync({
+        allowsRecordingIOS: true,
+        playsInSilentModeIOS: true,
+      });
+
+      const { recording } = await Audio.Recording.createAsync(
+        Audio.RecordingOptionsPresets.HIGH_QUALITY
+      );
+
+      recordingRef.current = recording;
+      setIsRecording(true);
+      setRecordingDuration(0);
+
+      Animated.loop(
+        Animated.sequence([
+          Animated.timing(recordAnim, {
+            toValue: 1.3,
+            duration: 600,
+            useNativeDriver: true,
+          }),
+          Animated.timing(recordAnim, {
+            toValue: 1,
+            duration: 600,
+            useNativeDriver: true,
+          }),
+        ])
+      ).start();
+
+      recordingTimer.current = setInterval(() => {
+        setRecordingDuration((d) => d + 1);
+      }, 1000);
+    } catch (e) {
+      console.error('[Chat] Recording start error:', e);
+      Alert.alert('Error', 'Could not start recording. Check microphone permissions.');
+    }
+  };
+
+  const stopRecording = async () => {
+    try {
+      if (!recordingRef.current) return;
+
+      await recordingRef.current.stopAndUnloadAsync();
+
+      await Audio.setAudioModeAsync({ allowsRecordingIOS: false });
+
+      const uri = recordingRef.current.getURI();
+      recordingRef.current = null;
+
+      setIsRecording(false);
+      recordAnim.stopAnimation();
+      recordAnim.setValue(1);
+
+      if (recordingTimer.current) {
+        clearInterval(recordingTimer.current);
+        recordingTimer.current = null;
+      }
+
+      if (uri) {
+        await sendMessage('Voice note', 'voiceNote', {
+          fileUrl: uri,
+          duration: recordingDuration,
+        });
+      }
+    } catch (e) {
+      console.error('[Chat] Recording stop error:', e);
+      setIsRecording(false);
+      recordAnim.setValue(1);
+      if (recordingTimer.current) {
+        clearInterval(recordingTimer.current);
+        recordingTimer.current = null;
+      }
+    }
+  };
+
+  useEffect(() => {
+    return () => {
+      if (recordingTimer.current) clearInterval(recordingTimer.current);
+      if (recordingRef.current) {
+        recordingRef.current.stopAndUnloadAsync().catch(() => {});
+        recordingRef.current = null;
+      }
+    };
+  }, []);
+
+  // ── Media pickers ──────────────────────────────────────────────────────────
+
+  const pickImage = async () => {
+    setShowAttachmentModal(false);
+    try {
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: 'images' as any,
+        quality: 0.8,
+        allowsMultipleSelection: false,
+      });
+      if (!result.canceled && result.assets[0]) {
+        const asset = result.assets[0];
+        await sendMessage('', 'image', {
+          fileUrl: asset.uri,
+          fileSize: asset.fileSize,
+          fileName: asset.fileName ?? 'photo.jpg',
+        });
+      }
+    } catch (e) {
+      console.error('[Chat] Image picker error:', e);
+    }
+  };
+
+  const pickVideo = async () => {
+    setShowAttachmentModal(false);
+    try {
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: 'videos' as any,
+        quality: 0.7,
+        videoMaxDuration: 60,
+      });
+      if (!result.canceled && result.assets[0]) {
+        const asset = result.assets[0];
+        await sendMessage('', 'video', {
+          fileUrl: asset.uri,
+          fileSize: asset.fileSize,
+          fileName: asset.fileName ?? 'video.mp4',
+          duration: asset.duration ? Math.floor(asset.duration) : undefined,
+        });
+      }
+    } catch (e) {
+      console.error('[Chat] Video picker error:', e);
+    }
+  };
+
+  const pickDocument = async () => {
+    setShowAttachmentModal(false);
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: '*/*',
+        copyToCacheDirectory: true,
+      });
+      if (!result.canceled && result.assets[0]) {
+        const file = result.assets[0];
+        await sendMessage('', 'file', {
+          fileUrl: file.uri,
+          fileName: file.name,
+          fileSize: file.size,
+        });
+      }
+    } catch (e) {
+      console.error('[Chat] Document picker error:', e);
+    }
+  };
+
+  const openCamera = async () => {
+    setShowAttachmentModal(false);
+    try {
+      const result = await ImagePicker.launchCameraAsync({
+        mediaTypes: 'images' as any,
+        quality: 0.8,
+        allowsEditing: true,
+      });
+      if (!result.canceled && result.assets[0]) {
+        const asset = result.assets[0];
+        await sendMessage('', 'image', {
+          fileUrl: asset.uri,
+          fileSize: asset.fileSize,
+          fileName: asset.fileName ?? 'camera.jpg',
+        });
+      }
+    } catch (e) {
+      console.error('[Chat] Camera error:', e);
+    }
+  };
+
+  // ── Auto relay share ───────────────────────────────────────────────────────
+
+  const handleAutoRelay = async () => {
+    setShowAttachmentModal(false);
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: '*/*',
+        copyToCacheDirectory: true,
+      });
+      if (!result.canceled && result.assets[0]) {
+        const file = result.assets[0];
+        setIsAutoRelaying(true);
+
+        Alert.alert(
+          'Auto Relay Share',
+          `"${file.name}" will be propagated to all ${nearbyDevices.length} nearby devices via mesh relay. Continue?`,
+          [
+            {
+              text: 'Send to All',
+              onPress: async () => {
+                try {
+                  await meshNetworkService.startAutoRelayShare(
+                    file.uri,
+                    file.name,
+                    file.size ?? 0
+                  );
+                  await sendMessage('', 'file', {
+                    fileUrl: file.uri,
+                    fileName: file.name,
+                    fileSize: file.size,
+                  });
+                  Alert.alert('Done', 'File has been relayed to all nearby devices.');
+                } catch (e) {
+                  Alert.alert('Error', 'Auto relay failed. Please try again.');
+                } finally {
+                  setIsAutoRelaying(false);
+                }
+              },
+            },
+            {
+              text: 'Cancel',
+              style: 'cancel',
+              onPress: () => setIsAutoRelaying(false),
+            },
+          ]
+        );
+      }
+    } catch (e) {
+      setIsAutoRelaying(false);
+      console.error('[Chat] Auto relay error:', e);
+    }
+  };
+
+  // ── Calls ──────────────────────────────────────────────────────────────────
+
+  const initiateCall = async (type: 'voice' | 'video') => {
+    if (!currentUser) return;
+
+    const targetDevice = nearbyDevices.find(
+      (d) => d.id === chatPartnerId || d.deviceId === chatPartnerId
+    );
+
+    if (!targetDevice?.isConnected) {
+      Alert.alert(
+        'User Out of Range',
+        'This user is not currently reachable via mesh. The call will connect when they come back in range.',
+        [{ text: 'OK' }]
+      );
+      return;
+    }
+
+    try {
+      const call = await callService.initiateCall(
+        currentUser.id,
+        chatPartnerId,
+        type,
+        chatPartnerId,
+        async (targetId, signal) => {
+          const signalMessage: Message = {
+            id: uuid.v4() as string,
+            chatId: id,
+            senderId: currentUser.id,
+            receiverId: targetId,
+            content: JSON.stringify(signal),
+            type: 'call',
+            timestamp: Date.now(),
+            status: 'sent',
+            encrypted: true,
+            hopCount: 0,
+            routePath: [],
+            reactions: [],
+            readBy: [],
+          };
+          await meshNetworkService.sendMessage(signalMessage, targetId);
+        }
+      );
+      router.push(`/call/${call.id}`);
+    } catch (e) {
+      console.error('[Chat] Call initiation failed:', e);
+      Alert.alert('Error', 'Could not start the call. Please try again.');
+    }
+  };
+
+  // ── Long press / reactions ─────────────────────────────────────────────────
+
+  const handleLongPress = (message: Message) => {
+    setSelectedMessage(message);
+    setShowReactionModal(true);
+  };
+
+  const addReaction = async (emoji: string) => {
+    if (!selectedMessage || !currentUser) return;
+
+    const updated = {
+      ...selectedMessage,
+      reactions: [
+        ...(selectedMessage.reactions ?? []),
+        { emoji, userId: currentUser.id, timestamp: Date.now() },
+      ],
+    };
+
+    setMessages((prev) =>
+      prev.map((m) => (m.id === selectedMessage.id ? updated : m))
+    );
+
+    try {
+      await DatabaseService.saveMessage(updated);
+    } catch (e) {
+      console.error('[Chat] Reaction save failed:', e);
+    }
+
+    setShowReactionModal(false);
+    setSelectedMessage(null);
+  };
+
+  const deleteMessage = async () => {
+    if (!selectedMessage) return;
+    const softDeleted = {
+      ...selectedMessage,
+      isDeleted: true,
+      content: '',
+    };
+    setMessages((prev) =>
+      prev.map((m) => (m.id === selectedMessage.id ? softDeleted : m))
+    );
+    await DatabaseService.softDeleteMessage(selectedMessage.id).catch(() => {});
+    setShowReactionModal(false);
+    setSelectedMessage(null);
+  };
+
+  // ── Attachment items ───────────────────────────────────────────────────────
+
+  const attachmentItems = [
+    {
+      icon: 'image-outline',
+      label: 'Gallery',
+      action: pickImage,
+      color: COLORS.neonPurple,
+    },
+    {
+      icon: 'video-outline',
+      label: 'Video',
+      action: pickVideo,
+      color: COLORS.neonBlue,
+    },
+    {
+      icon: 'camera-outline',
+      label: 'Camera',
+      action: openCamera,
+      color: COLORS.neonTeal,
+    },
+    {
+      icon: 'file-outline',
+      label: 'Document',
+      action: pickDocument,
+      color: COLORS.primary,
+    },
+    {
+      icon: 'access-point',
+      label: 'Auto Relay',
+      action: handleAutoRelay,
+      color: COLORS.neonOrange,
+    },
+    {
+      icon: 'store-outline',
+      label: 'Marketplace',
+      action: () => {
+        setShowAttachmentModal(false);
+        router.push('/marketplace');
+      },
+      color: COLORS.warning,
+    },
+  ];
+
+  // ── Bottom padding: respect Android nav bar, never hide input ─────────────
+  // When keyboard is NOT visible: add safe area bottom inset so the input bar
+  // sits above the Android gesture nav bar / home indicator.
+  // When keyboard IS visible: KeyboardAvoidingView handles it — no extra padding needed.
+  const inputBarBottomPadding = keyboardVisible
+    ? 0
+    : Math.max(insets.bottom, Platform.OS === 'android' ? 8 : 0);
+
+  // ── Render ─────────────────────────────────────────────────────────────────
+
+  return (
+    <SafeAreaView style={styles.container} edges={['top']}>
+      {/* Header */}
+      <View style={styles.header}>
+        <TouchableOpacity
+          onPress={() => router.back()}
+          style={styles.backButton}
+        >
+          <Feather name="arrow-left" size={22} color={COLORS.text} />
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={styles.headerCenter}
+          onPress={() => router.push(`/user-profile/${chatPartnerId}`)}
+        >
+          <Image
+            source={{
+              uri: `https://api.dicebear.com/7.x/avataaars/png?seed=${chatPartnerId}`,
+            }}
+            style={styles.headerAvatar}
+          />
+          <View>
+            <Text style={styles.headerName}>{partnerName}</Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+              {isMeshActive ? (
+                <MaterialCommunityIcons
+                  name="bluetooth"
+                  size={10}
+                  color={COLORS.neonTeal}
+                />
+              ) : null}
+              <Text style={styles.headerStatus}>
+                {isTyping
+                  ? 'typing...'
+                  : isMeshActive
+                  ? 'Online via mesh'
+                  : 'Offline — messages queued'}
+              </Text>
+            </View>
+          </View>
+        </TouchableOpacity>
+
+        <View style={styles.headerActions}>
+          <TouchableOpacity
+            style={styles.headerBtn}
+            onPress={() => initiateCall('video')}
+          >
+            <Feather name="video" size={20} color={COLORS.text} />
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.headerBtn}
+            onPress={() => initiateCall('voice')}
+          >
+            <Feather name="phone" size={20} color={COLORS.text} />
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.headerBtn}>
+            <Feather name="more-vertical" size={20} color={COLORS.text} />
+          </TouchableOpacity>
+        </View>
+      </View>
+
+      {/* Offline banner */}
+      {!isMeshActive && (
+        <View style={styles.offlineBanner}>
+          <MaterialCommunityIcons
+            name="timer-sand"
+            size={14}
+            color={COLORS.warning}
+          />
+          <Text style={styles.offlineBannerText}>
+            Messages will send automatically when in range
+          </Text>
+        </View>
+      )}
+
+      {/* Auto relay banner */}
+      {isAutoRelaying && (
+        <View style={styles.relayBanner}>
+          <MaterialCommunityIcons
+            name="access-point"
+            size={14}
+            color={COLORS.neonTeal}
+          />
+          <Text style={styles.relayBannerText}>
+            Relaying file to all nearby devices...
+          </Text>
+        </View>
+      )}
+
+      {/*
+        KEY FIX — Layout structure:
+        flex: 1 container holds the FlatList + KeyboardAvoidingView stacked.
+        KeyboardAvoidingView wraps ONLY the input bar (not the whole screen).
+        This means when keyboard opens, the input bar rises up to sit just above
+        the keyboard — exactly like WhatsApp / iMessage behaviour.
+        The FlatList fills the remaining space and scrolls normally.
+      */}
+      <KeyboardAvoidingView
+        style={styles.flex}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        keyboardVerticalOffset={0}
+      >
+        {/* Messages list — fills all available space above the input */}
+        <FlatList
+          ref={flatListRef}
+          data={messages}
+          keyExtractor={(item) => item.id}
+          renderItem={({ item }) => (
+            <MessageBubble
+              message={item}
+              currentUserId={currentUser?.id ?? ''}
+              onLongPress={handleLongPress}
+            />
+          )}
+          contentContainerStyle={styles.messageList}
+          showsVerticalScrollIndicator={false}
+          onContentSizeChange={() =>
+            flatListRef.current?.scrollToEnd({ animated: false })
+          }
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="interactive"
+          ListEmptyComponent={() => (
+            <View style={styles.emptyChat}>
+              <MaterialCommunityIcons
+                name="lock-outline"
+                size={32}
+                color={COLORS.border}
+              />
+              <Text style={styles.emptyChatText}>
+                Messages are end-to-end encrypted
+              </Text>
+            </View>
+          )}
+        />
+
+        {/* Recording bar — shows above input when recording */}
+       {isRecording && (
+  <View style={[styles.recordingBar, { paddingBottom: SPACING.md + inputBarBottomPadding }]}>
+    <TouchableOpacity onPress={cancelRecording}>
+      <Feather name="trash-2" size={20} color={COLORS.error} />
+    </TouchableOpacity>
+    <Animated.View style={[styles.recordingDot, { transform: [{ scale: recordAnim }] }]} />
+    <Text style={styles.recordingText}>
+      Recording... {formatDuration(recordingDuration)}
+    </Text>
+    <TouchableOpacity onPress={stopRecording}>
+      <View style={styles.stopRecordingBtn}>
+        <Feather name="stop-circle" size={32} color={COLORS.primary} />
+      </View>
+    </TouchableOpacity>
+  </View>
+)}
+        {/* Input bar — always above keyboard, never behind nav bar */}
+        <View
+          style={[
+            styles.inputBar,
+            { paddingBottom: inputBarBottomPadding + SPACING.sm },
+          ]}
+        >
+          <TouchableOpacity
+            style={styles.inputAction}
+            onPress={() => setShowAttachmentModal(true)}
+          >
+            <Feather
+              name="plus-circle"
+              size={24}
+              color={COLORS.textSecondary}
+            />
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.inputAction}
+            onPress={pickImage}
+          >
+            <MaterialCommunityIcons
+              name="image-outline"
+              size={24}
+              color={COLORS.textSecondary}
+            />
+          </TouchableOpacity>
+
+          <TextInput
+            ref={inputRef}
+            style={styles.textInput}
+            placeholder="Message..."
+            placeholderTextColor={COLORS.textMuted}
+            value={inputText}
+            onChangeText={(t) => {
+              setInputText(t);
+              setIsTyping(t.length > 0);
+            }}
+            multiline
+            maxLength={2000}
+            // textAlignVertical ensures text starts at top on Android
+            textAlignVertical="top"
+          />
+
+          {inputText.trim().length > 0 ? (
+            <TouchableOpacity style={styles.sendButton} onPress={handleSend}>
+              <LinearGradient
+                colors={COLORS.gradientPrimary as [string, string]}
+                style={styles.sendGradient}
+              >
+                <Feather name="send" size={18} color="#fff" />
+              </LinearGradient>
+            </TouchableOpacity>
+          ) : (
+            <TouchableOpacity
+              style={styles.micButton}
+              onLongPress={startRecording}
+              onPressOut={isRecording ? stopRecording : undefined}
+            >
+              <Feather
+                name="mic"
+                size={24}
+                color={isRecording ? COLORS.error : COLORS.textSecondary}
+              />
+            </TouchableOpacity>
+          )}
+        </View>
+      </KeyboardAvoidingView>
+
+      {/* Attachment modal */}
+      <Modal
+        visible={showAttachmentModal}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowAttachmentModal(false)}
+      >
+        <TouchableOpacity
+          style={styles.modalOverlay}
+          onPress={() => setShowAttachmentModal(false)}
+          activeOpacity={1}
+        >
+          <View
+            style={[
+              styles.attachmentSheet,
+              { paddingBottom: insets.bottom + SPACING.xl },
+            ]}
+          >
+            <Text style={styles.attachmentTitle}>Share</Text>
+            <View style={styles.attachmentGrid}>
+              {attachmentItems.map((item) => (
+                <TouchableOpacity
+                  key={item.label}
+                  style={styles.attachmentItem}
+                  onPress={item.action}
+                >
+                  <View
+                    style={[
+                      styles.attachmentIcon,
+                      { backgroundColor: item.color + '22' },
+                    ]}
+                  >
+                    <MaterialCommunityIcons
+                      name={item.icon as any}
+                      size={26}
+                      color={item.color}
+                    />
+                  </View>
+                  <Text style={styles.attachmentLabel}>{item.label}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
+      {/* Reaction / action modal */}
+      <Modal
+        visible={showReactionModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowReactionModal(false)}
+      >
+        <TouchableOpacity
+          style={styles.modalOverlay}
+          onPress={() => setShowReactionModal(false)}
+          activeOpacity={1}
+        >
+          <View
+            style={[
+              styles.reactionSheet,
+              { paddingBottom: insets.bottom + SPACING.xl },
+            ]}
+          >
+            <View style={styles.reactionRow}>
+              {['👍', '❤️', '😂', '😮', '😢', '🙏'].map((emoji) => (
+                <TouchableOpacity
+                  key={emoji}
+                  style={styles.reactionBtn}
+                  onPress={() => addReaction(emoji)}
+                >
+                  <Text style={styles.reactionEmoji}>{emoji}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+            <View style={styles.messageActions}>
+              {[
+                { icon: 'reply', label: 'Reply' },
+                { icon: 'share-2', label: 'Forward' },
+                { icon: 'copy', label: 'Copy' },
+                { icon: 'trash-2', label: 'Delete' },
+              ].map((action) => (
+                <TouchableOpacity
+                  key={action.label}
+                  style={styles.messageActionBtn}
+                  onPress={
+                    action.label === 'Delete' ? deleteMessage : undefined
+                  }
+                >
+                  <Feather
+                    name={action.icon as any}
+                    size={18}
+                    color={
+                      action.label === 'Delete' ? COLORS.error : COLORS.text
+                    }
+                  />
+                  <Text
+                    style={[
+                      styles.messageActionLabel,
+                      action.label === 'Delete' && { color: COLORS.error },
+                    ]}
+                  >
+                    {action.label}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </View>
+        </TouchableOpacity>
+      </Modal>
+    </SafeAreaView>
+  );
+}
+
+// ─── Styles ───────────────────────────────────────────────────────────────────
+
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: COLORS.background },
+  flex: { flex: 1 },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.md,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.borderLight,
+    backgroundColor: COLORS.surface,
+  },
+  backButton: { padding: SPACING.sm, marginRight: SPACING.xs },
+  headerCenter: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACING.md,
+  },
+  headerAvatar: { width: 40, height: 40, borderRadius: 20 },
+  headerName: { fontSize: 15, fontWeight: '700', color: COLORS.text },
+  headerStatus: { fontSize: 12, color: COLORS.neonTeal },
+  headerActions: { flexDirection: 'row' },
+  headerBtn: { padding: SPACING.sm },
+  offlineBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACING.sm,
+    backgroundColor: 'rgba(255,159,10,0.12)',
+    paddingHorizontal: SPACING.xl,
+    paddingVertical: SPACING.sm,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255,159,10,0.2)',
+  },
+  offlineBannerText: {
+    fontSize: 12,
+    color: COLORS.warning,
+    fontWeight: '600',
+  },
+  relayBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACING.sm,
+    backgroundColor: 'rgba(50,215,75,0.12)',
+    paddingHorizontal: SPACING.xl,
+    paddingVertical: SPACING.sm,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(50,215,75,0.2)',
+  },
+  relayBannerText: {
+    fontSize: 12,
+    color: COLORS.neonTeal,
+    fontWeight: '600',
+  },
+  messageList: {
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.md,
+    paddingBottom: 12,
+    flexGrow: 1,
+  },
+  bubbleWrapper: { marginVertical: 3, maxWidth: '80%' },
+  bubbleWrapperSent: { alignSelf: 'flex-end', alignItems: 'flex-end' },
+  bubbleWrapperReceived: { alignSelf: 'flex-start', alignItems: 'flex-start' },
+  bubble: {
+    borderRadius: 18,
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.sm,
+    minWidth: 60,
+  },
+  bubbleSent: {
+    backgroundColor: COLORS.messageSent,
+    borderWidth: 1,
+    borderColor: COLORS.messageSentBorder,
+    borderBottomRightRadius: 4,
+  },
+  bubbleReceived: {
+    backgroundColor: COLORS.messageReceived,
+    borderWidth: 1,
+    borderColor: COLORS.messageReceivedBorder,
+    borderBottomLeftRadius: 4,
+  },
+  bubbleDeleted: { opacity: 0.5 },
+  replyPreview: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: SPACING.xs,
+    opacity: 0.7,
+  },
+  replyBar: {
+    width: 3,
+    height: 30,
+    backgroundColor: COLORS.primary,
+    borderRadius: 2,
+    marginRight: SPACING.sm,
+  },
+  replyText: { flex: 1, fontSize: 12, color: COLORS.textSecondary },
+  deletedText: {
+    fontSize: 14,
+    color: COLORS.textMuted,
+    fontStyle: 'italic',
+  },
+  messageText: { fontSize: 15, lineHeight: 22 },
+  textSent: { color: '#fff' },
+  textReceived: { color: COLORS.text },
+  textSentMuted: { color: 'rgba(255,255,255,0.6)' },
+  textReceivedMuted: { color: COLORS.textSecondary },
+  messageImage: { width: 200, height: 150, borderRadius: BORDER_RADIUS.md },
+  imageCaption: { fontSize: 13, color: '#fff', marginTop: 4 },
+  voiceNoteContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACING.sm,
+    paddingVertical: 4,
+  },
+  voiceWave: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 2,
+    flex: 1,
+  },
+  waveBar: { width: 3, borderRadius: 2 },
+  waveBarSent: { backgroundColor: 'rgba(255,255,255,0.7)' },
+  waveBarReceived: { backgroundColor: COLORS.primaryLight },
+  voiceDuration: { fontSize: 12 },
+  fileContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACING.md,
+    paddingVertical: 4,
+  },
+  fileInfo: { flex: 1 },
+  fileName: { fontSize: 14, fontWeight: '600' },
+  fileSize: { fontSize: 11 },
+  reactionsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 4,
+    marginTop: 4,
+  },
+  reaction: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255,255,255,0.1)',
+    borderRadius: BORDER_RADIUS.full,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    gap: 2,
+  },
+  reactionEmoji: { fontSize: 14 },
+  reactionCount: { fontSize: 11, color: COLORS.textSecondary },
+  messageFooter: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    gap: 3,
+    marginTop: 3,
+  },
+  messageTime: { fontSize: 10 },
+  timeSent: { color: 'rgba(255,255,255,0.5)' },
+  timeReceived: { color: COLORS.textMuted },
+  receiptsRow: {
+    flexDirection: 'row',
+    marginTop: 2,
+    gap: 2,
+    justifyContent: 'flex-end',
+  },
+  receiptAvatar: {
+    width: 14,
+    height: 14,
+    borderRadius: 7,
+    borderWidth: 1,
+    borderColor: COLORS.background,
+  },
+  emptyChat: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 60,
+    gap: SPACING.md,
+  },
+  emptyChatText: { fontSize: 13, color: COLORS.textMuted },
+  recordingBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: COLORS.surfaceElevated,
+    paddingHorizontal: SPACING.xl,
+    paddingVertical: SPACING.md,
+    gap: SPACING.md,
+  },
+  recordingDot: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    backgroundColor: COLORS.error,
+  },
+  recordingText: { flex: 1, color: COLORS.text, fontSize: 14 },
+  // Input bar: no fixed bottom, lives inside KAV so it rises with keyboard
+  inputBar: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    backgroundColor: COLORS.surface,
+    borderTopWidth: 1,
+    borderTopColor: COLORS.borderLight,
+    paddingHorizontal: SPACING.md,
+    paddingTop: SPACING.sm,
+    gap: SPACING.sm,
+  },
+  inputAction: {
+    padding: SPACING.xs,
+    justifyContent: 'center',
+    alignSelf: 'flex-end',
+    paddingBottom: 10,
+  },
+  textInput: {
+    flex: 1,
+    backgroundColor: COLORS.card,
+    borderRadius: BORDER_RADIUS.xl,
+    paddingHorizontal: SPACING.lg,
+    paddingTop: SPACING.md,
+    paddingBottom: SPACING.md,
+    color: COLORS.text,
+    fontSize: 15,
+    // Min height 44 for easy tapping, max 120 before scroll
+    minHeight: 44,
+    maxHeight: 120,
+    borderWidth: 1,
+    borderColor: COLORS.borderLight,
+  },
+  sendButton: {
+    borderRadius: 20,
+    overflow: 'hidden',
+    alignSelf: 'flex-end',
+    marginBottom: 4,
+  },
+  sendGradient: {
+    width: 40,
+    height: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  micButton: {
+    padding: SPACING.xs,
+    alignSelf: 'flex-end',
+    paddingBottom: 10,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: COLORS.overlay,
+    justifyContent: 'flex-end',
+  },
+  attachmentSheet: {
+    backgroundColor: COLORS.surfaceElevated,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    padding: SPACING.xl,
+  },
+  attachmentTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: COLORS.text,
+    marginBottom: SPACING.xl,
+  },
+  attachmentGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: SPACING.lg,
+    justifyContent: 'space-around',
+  },
+  attachmentItem: { alignItems: 'center', gap: SPACING.sm },
+  attachmentIcon: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  attachmentLabel: {
+    fontSize: 12,
+    color: COLORS.textSecondary,
+    fontWeight: '600',
+  },
+  reactionSheet: {
+    backgroundColor: COLORS.surfaceElevated,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    padding: SPACING.xl,
+  },
+  reactionRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    marginBottom: SPACING.xl,
+  },
+  reactionBtn: { padding: SPACING.sm },
+  messageActions: { flexDirection: 'row', justifyContent: 'space-around' },
+  messageActionBtn: { alignItems: 'center', gap: SPACING.xs },
+  messageActionLabel: { fontSize: 12, color: COLORS.textSecondary },
+});

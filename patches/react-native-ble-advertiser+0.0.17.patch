@@ -1,0 +1,47 @@
+diff --git a/node_modules/react-native-ble-advertiser/android/build.gradle b/node_modules/react-native-ble-advertiser/android/build.gradle
+index 2526548..d7409ca 100644
+--- a/node_modules/react-native-ble-advertiser/android/build.gradle
++++ b/node_modules/react-native-ble-advertiser/android/build.gradle
+@@ -1,12 +1,13 @@
+ apply plugin: 'com.android.library'
+ 
+ android {
+-    compileSdkVersion 28
+-    buildToolsVersion "28.0.3"
++    namespace "com.vitorpamplona.bleavertiser"
++
++    compileSdkVersion 34
+ 
+     defaultConfig {
+         minSdkVersion 21
+-        targetSdkVersion 28
++        targetSdkVersion 34
+         versionCode 1
+         versionName "1.0"
+     }
+@@ -15,4 +16,3 @@ android {
+ dependencies {
+     implementation 'com.facebook.react:react-native:+'
+ }
+\ No newline at end of file
+-
+diff --git a/node_modules/react-native-ble-advertiser/android/src/main/AndroidManifest.xml b/node_modules/react-native-ble-advertiser/android/src/main/AndroidManifest.xml
+index 5246db1..c6654af 100644
+--- a/node_modules/react-native-ble-advertiser/android/src/main/AndroidManifest.xml
++++ b/node_modules/react-native-ble-advertiser/android/src/main/AndroidManifest.xml
+@@ -1,7 +1,8 @@
+-<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+-          package="com.vitorpamplona.bleavertiser">
+-          <uses-permission android:name="android.permission.BLUETOOTH" />
+-          <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" />
+-          <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+-          <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
++<manifest xmlns:android="http://schemas.android.com/apk/res/android">
++
++    <uses-permission android:name="android.permission.BLUETOOTH" />
++    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" />
++    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
++    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
++
+ </manifest>
+\ No newline at end of file
